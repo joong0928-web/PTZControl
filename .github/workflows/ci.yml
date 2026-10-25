@@ -14,6 +14,45 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Enlarge PTZ control UI 2x
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import re
+          
+          rc_path = Path('PTZControl/PTZControl.rc')
+          raw = rc_path.read_bytes()
+          # RC uses codepage 1252 in resource definitions.
+          text = raw.decode('cp1252')
+          pattern = r'(?ms)^(IDD_PTZCONTROL\s+DIALOGEX\s+0,\s*0,\s*)(\d+),\s*(\d+)(\r?\n.*?\r?\nEND)'
+          m = re.search(pattern, text)
+          if not m:
+              raise RuntimeError('Main PTZ dialog not found. Stop to avoid changing unrelated resources.')
+          body = m.group(4)
+          line_re = re.compile(r'(?m)^(\s*PUSHBUTTON\s+.*?,\s*)(\d+),\s*(\d+),\s*(\d+),\s*(\d+)(,.*)$')
+          count = [0]
+          def double_button(mm):
+              count[0] += 1
+              return mm.group(1) + ','.join(str(int(mm.group(i))*2) for i in range(2,6)) + mm.group(6)
+          new_body = line_re.sub(double_button, body)
+          if count[0] != 21:
+              raise RuntimeError(f'Expected 21 PTZ buttons, matched {count[0]}; no modifications saved.')
+          new_dialog = m.group(1)+str(int(m.group(2))*2)+', '+str(int(m.group(3))*2)+new_body
+          text = text[:m.start()] + new_dialog + text[m.end():]
+          rc_path.write_bytes(text.encode('cp1252'))
+          print('Scaled main dialog and 21 PTZ buttons 2x; Settings unchanged.')
+          
+          cpp_path = Path('PTZControl/PTZControlDlg.cpp')
+          cpp = cpp_path.read_bytes()
+          needle = b'\t\t\tpBtn->SetImage(hIcon);'
+          assert cpp.count(needle) == 1, 'Could not locate icon setup safely'
+          replacement = b'''\t\t\t// Enlarge button icon to match the 2x dialog buttons.\n\t\t\tHICON hLargeIcon = static_cast<HICON>(::CopyImage(hIcon, IMAGE_ICON, 32, 32, 0));\n\t\t\tif (hLargeIcon)\n\t\t\t{\n\t\t\t\t::DestroyIcon(hIcon);\n\t\t\t\thIcon = hLargeIcon;\n\t\t\t}\n\t\t\tpBtn->SetImage(hIcon);'''
+          cpp_path.write_bytes(cpp.replace(needle,replacement))
+          print('Scaled button icons to 32x32; motion, zoom, presets and reverse code untouched.')
+          '@ | Set-Content -Path scale_ptz_ui.py -Encoding utf8
+          python scale_ptz_ui.py
+
       - name: Restore NuGet packages
         run: nuget restore PTZControl/PTZControl.sln
 
@@ -28,12 +67,12 @@ jobs:
             Select-Object -First 1
           if (-not $exe) { throw 'Release PTZControl.exe not found' }
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Copy-Item $exe.FullName artifacts/PTZControl_Reverse.exe
+          Copy-Item $exe.FullName artifacts/PTZControl_Reverse_2x.exe
           Write-Host "Prepared: $($exe.FullName)"
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: PTZControl_Reverse_x64
-          path: artifacts/PTZControl_Reverse.exe
+          name: PTZControl_Reverse_2x_x64
+          path: artifacts/PTZControl_Reverse_2x.exe
           if-no-files-found: error
