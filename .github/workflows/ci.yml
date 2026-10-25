@@ -1,24 +1,39 @@
-name: Build PTZControl Project
+name: Build PTZControl Reverse EXE
 
 on:
   push:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        configuration: [Debug]
-        platform: [x86, x64]
-
     steps:
-    - uses: actions/checkout@v2
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Setup MSBuild path
-      uses: microsoft/setup-msbuild@v1.0.2
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-    - name: Restore NuGet packages
-      run: nuget restore PTZControl/PTZControl.sln
+      - name: Restore NuGet packages
+        run: nuget restore PTZControl/PTZControl.sln
 
-    - name: Build the PTZControl project
-      run: msbuild PTZControl/PTZControl.sln /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }}
+      - name: Build Release x64
+        run: msbuild PTZControl/PTZControl.sln /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: Collect EXE
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path . -Recurse -File -Filter PTZControl.exe |
+            Where-Object { $_.FullName -match '[\\/]Release[\\/]' } |
+            Select-Object -First 1
+          if (-not $exe) { throw 'Release PTZControl.exe not found' }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item $exe.FullName artifacts/PTZControl_Reverse.exe
+          Write-Host "Prepared: $($exe.FullName)"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: PTZControl_Reverse_x64
+          path: artifacts/PTZControl_Reverse.exe
+          if-no-files-found: error
